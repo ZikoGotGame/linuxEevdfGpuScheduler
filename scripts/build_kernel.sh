@@ -10,6 +10,8 @@ VMLINUX_SRC="$SCRIPT_DIR/../"
 BUILD_DIR="$SCRIPT_DIR/../build/"
 LOCALVERSION="-eevdf-build"
 
+cd "$VMLINUX_SRC"
+make mrproper
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
@@ -28,7 +30,7 @@ make -C "$VMLINUX_SRC" O="$BUILD_DIR" -j"$(nproc)" | tee build.log
 sudo make -C "$VMLINUX_SRC" O="$BUILD_DIR" modules_install
 sudo make -C "$VMLINUX_SRC" O="$BUILD_DIR" install
 
-BOOT_ENTRY=$(ls /boot/loader/entries/*eevdf-build.conf | head -n1)
+BOOT_ENTRY=$(ls /boot/loader/entries/*eevdf-build* | head -n1)
 if [[ -f "$BOOT_ENTRY" ]]; then
     sudo sed -i 's/^title.*/title   EEVDF BUILD/' "$BOOT_ENTRY"
 fi
