@@ -1,0 +1,6 @@
+#define VO___bss_start _AC(0xffffffff8416b000,UL)
+#define VO___inittext_end _AC(0xffffffff83d5c000,UL)
+#define VO___start_rodata _AC(0xffffffff82400000,UL)
+#define VO__end _AC(0xffffffff84630000,UL)
+#define VO__sinittext _AC(0xffffffff83cb7000,UL)
+#define VO__text _AC(0xffffffff81000000,UL)
