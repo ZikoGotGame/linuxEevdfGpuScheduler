@@ -23,7 +23,7 @@ make -C "$VMLINUX_SRC" O="$BUILD_DIR" olddefconfig
   --set-str LOCALVERSION "$LOCALVERSION" \
   --enable DRM \
   --enable DRM_SCHED \
-  --enable DRM_DEBUG
+  --enable DRM_DEBUG 
 
 make -C "$VMLINUX_SRC" O="$BUILD_DIR" -j"$(nproc)" | tee build.log
 

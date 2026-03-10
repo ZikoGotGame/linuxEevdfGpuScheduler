@@ -3,12 +3,12 @@
 #ifndef _DRM_GPU_SCHEDULER_INTERNAL_H_
 #define _DRM_GPU_SCHEDULER_INTERNAL_H_
 
-
 /* Used to choose between FIFO and RR job-scheduling */
 extern int drm_sched_policy;
 
-#define DRM_SCHED_POLICY_RR    0
-#define DRM_SCHED_POLICY_FIFO  1
+#define DRM_SCHED_POLICY_RR 0
+#define DRM_SCHED_POLICY_FIFO 1
+#define DRM_SCHED_POLICY_EEVDF 2
 
 void drm_sched_wakeup(struct drm_gpu_scheduler *sched);
 
@@ -76,8 +76,7 @@ drm_sched_entity_queue_peek(struct drm_sched_entity *entity)
 }
 
 /* Return true if entity could provide a job. */
-static inline bool
-drm_sched_entity_is_ready(struct drm_sched_entity *entity)
+static inline bool drm_sched_entity_is_ready(struct drm_sched_entity *entity)
 {
 	if (!spsc_queue_count(&entity->job_queue))
 		return false;
