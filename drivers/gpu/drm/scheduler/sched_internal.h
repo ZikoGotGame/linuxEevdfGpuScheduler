@@ -3,12 +3,42 @@
 #ifndef _DRM_GPU_SCHEDULER_INTERNAL_H_
 #define _DRM_GPU_SCHEDULER_INTERNAL_H_
 
+#include <linux/ktime.h>
+#include <linux/kref.h>
+#include <linux/spinlock.h>
+
 /* Used to choose between FIFO and RR job-scheduling */
 extern int drm_sched_policy;
 
 #define DRM_SCHED_POLICY_RR 0
 #define DRM_SCHED_POLICY_FIFO 1
 #define DRM_SCHED_POLICY_EEVDF 2
+
+/* 1 ms virtual */
+#define DRM_SCHED_DEFAULT_SLICE 1000000ULL
+
+/**
+ * struct drm_sched_entity_stats - execution stats for an entity.
+ *
+ * This is to hold information about entity deadlines because it needs to be accessed
+ * by both entites and jobs. They have separate liftimes which is why this is it's own struct.
+ *
+ * @kref: refernce count to this object.
+ * @lock: lock gaurding updates.
+ * @runtime: time entity spent on GPU.
+ * @v_runtime: virtual runtime used to calculate the deadline.
+ * @v_deadline: the deadline by which this entity should run.
+ * @slice: the slice of time this entity should run on the GPU.
+ */
+struct drm_sched_entity_stats {
+	struct kref kref;
+	spinlock_t lock;
+	struct drm_sched_entity *entity;
+	ktime_t runtime;
+	u64 v_runtime;
+	u64 deadline;
+	u64 slice;
+};
 
 void drm_sched_wakeup(struct drm_gpu_scheduler *sched);
 
@@ -19,6 +49,9 @@ void drm_sched_rq_remove_entity(struct drm_sched_rq *rq,
 
 void drm_sched_rq_update_fifo_locked(struct drm_sched_entity *entity,
 				     struct drm_sched_rq *rq, ktime_t ts);
+
+void drm_sched_rq_update_eevdf_locked(struct drm_sched_entity *entity,
+				      struct drm_sched_rq *rq, ktime_t delta);
 
 void drm_sched_entity_select_rq(struct drm_sched_entity *entity);
 struct drm_sched_job *drm_sched_entity_pop_job(struct drm_sched_entity *entity);
@@ -32,6 +65,16 @@ void drm_sched_fence_free(struct drm_sched_fence *fence);
 void drm_sched_fence_scheduled(struct drm_sched_fence *fence,
 			       struct dma_fence *parent);
 void drm_sched_fence_finished(struct drm_sched_fence *fence, int result);
+
+inline void drm_sched_stats_get(struct drm_sched_entity_stats *stats);
+
+inline void drm_sched_stats_put(struct drm_sched_entity_stats *stats);
+
+struct drm_sched_entity_stats *
+alloc_entity_stats(struct drm_sched_entity *entity);
+
+void drm_sched_stats_update_deadline(struct drm_sched_entity_stats *stats,
+				     ktime_t delta);
 
 /**
  * drm_sched_entity_queue_pop - Low level helper for popping queued jobs

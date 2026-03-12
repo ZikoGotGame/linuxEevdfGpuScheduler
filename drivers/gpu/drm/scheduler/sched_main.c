@@ -84,7 +84,7 @@
 #define CREATE_TRACE_POINTS
 #include "gpu_scheduler_trace.h"
 
-int drm_sched_policy = DRM_SCHED_POLICY_FIFO;
+int drm_sched_policy = DRM_SCHED_POLICY_EEVDF;
 
 /**
  * DOC: sched_policy (int)
@@ -148,6 +148,18 @@ drm_sched_entity_compare_before(struct rb_node *a, const struct rb_node *b)
 			    ent_b->oldest_job_waiting);
 }
 
+static __always_inline bool
+drm_sched_entity_compare_before_eevdf(struct rb_node *a,
+				      const struct rb_node *b)
+{
+	struct drm_sched_entity *ent_a =
+		rb_entry((a), struct drm_sched_entity, rb_tree_node);
+	struct drm_sched_entity *ent_b =
+		rb_entry((b), struct drm_sched_entity, rb_tree_node);
+
+	return ent_a->stats->deadline < ent_b->stats->deadline;
+}
+
 static void drm_sched_rq_remove_fifo_locked(struct drm_sched_entity *entity,
 					    struct drm_sched_rq *rq)
 {
@@ -174,6 +186,25 @@ void drm_sched_rq_update_fifo_locked(struct drm_sched_entity *entity,
 
 	rb_add_cached(&entity->rb_tree_node, &rq->rb_tree_root,
 		      drm_sched_entity_compare_before);
+}
+
+void drm_sched_rq_update_eevdf_locked(struct drm_sched_entity *entity,
+				      struct drm_sched_rq *rq, ktime_t delta)
+{
+	/*
+	 * Both locks need to be grabbed, one to protect from entity->rq change
+	 * for entity from within concurrent drm_sched_entity_select_rq and the
+	 * other to update the rb tree structure.
+	 */
+	lockdep_assert_held(&entity->lock);
+	lockdep_assert_held(&rq->lock);
+
+	drm_sched_rq_remove_fifo_locked(entity, rq);
+
+	drm_sched_stats_update_deadline(entity->stats, delta);
+
+	rb_add_cached(&entity->rb_tree_node, &rq->rb_tree_root,
+		      drm_sched_entity_compare_before_eevdf);
 }
 
 /**
@@ -239,7 +270,8 @@ void drm_sched_rq_remove_entity(struct drm_sched_rq *rq,
 	if (rq->current_entity == entity)
 		rq->current_entity = NULL;
 
-	if (drm_sched_policy == DRM_SCHED_POLICY_FIFO)
+	if (drm_sched_policy == DRM_SCHED_POLICY_FIFO ||
+	    drm_sched_policy == DRM_SCHED_POLICY_EEVDF)
 		drm_sched_rq_remove_fifo_locked(entity, rq);
 
 	spin_unlock(&rq->lock);
@@ -376,6 +408,21 @@ static void drm_sched_job_done(struct drm_sched_job *s_job, int result)
 
 	atomic_sub(s_job->credits, &sched->credit_count);
 	atomic_dec(sched->score);
+
+	ktime_t delta = ktime_set(0, 0);
+	if (s_job->start_ts != 0)
+		delta = ktime_sub(ktime_get(), s_job->start_ts);
+
+	struct drm_sched_entity *entity = s_job->stats->entity;
+	if (entity && entity->rq) {
+		spin_lock(&entity->lock);
+		spin_lock(&entity->rq->lock);
+
+		drm_sched_rq_update_eevdf_locked(entity, entity->rq, delta);
+
+		spin_unlock(&entity->rq->lock);
+		spin_unlock(&entity->lock);
+	}
 
 	trace_drm_sched_job_done(s_fence);
 
@@ -835,6 +882,8 @@ int drm_sched_job_init(struct drm_sched_job *job,
 	memset(job, 0, sizeof(*job));
 
 	job->entity = entity;
+	job->stats = entity->stats;
+	drm_sched_stats_get(job->stats);
 	job->credits = credits;
 	job->s_fence = drm_sched_fence_alloc(entity, owner, drm_client_id);
 	if (!job->s_fence)
@@ -1074,6 +1123,9 @@ void drm_sched_job_cleanup(struct drm_sched_job *job)
 
 	job->s_fence = NULL;
 
+	drm_sched_stats_put(job->stats);
+	job->stats = NULL;
+
 	xa_for_each(&job->dependencies, index, fence) {
 		dma_fence_put(fence);
 	}
@@ -1108,7 +1160,8 @@ drm_sched_select_entity(struct drm_gpu_scheduler *sched)
 {
 	struct drm_sched_entity *entity;
 
-	entity = drm_sched_policy == DRM_SCHED_POLICY_FIFO ?
+	entity = drm_sched_policy == DRM_SCHED_POLICY_FIFO ||
+				 drm_sched_policy == DRM_SCHED_POLICY_EEVDF ?
 			 drm_sched_rq_select_entity_fifo(sched,
 							 sched->sched_rq[0]) :
 			 drm_sched_rq_select_entity_rr(sched,
@@ -1267,6 +1320,7 @@ static void drm_sched_run_job_work(struct work_struct *w)
 	drm_sched_job_begin(sched_job);
 
 	trace_drm_sched_job_run(sched_job, entity);
+	sched_job->start_ts = ktime_get();
 	/*
 	 * The run_job() callback must by definition return a fence whose
 	 * refcount has been incremented for the scheduler already.
