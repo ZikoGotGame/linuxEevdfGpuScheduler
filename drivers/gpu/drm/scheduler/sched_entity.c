@@ -21,7 +21,6 @@
  *
  */
 
-#include "linux/ktime.h"
 #include "linux/spinlock.h"
 #include <linux/export.h>
 #include <linux/slab.h>
@@ -77,7 +76,7 @@ int drm_sched_entity_init(struct drm_sched_entity *entity,
 	entity->num_sched_list = num_sched_list;
 	entity->priority = priority;
 	entity->last_user = current->group_leader;
-	entity->stats = alloc_entity_stats(entity);
+	entity->stats = alloc_entity_stats();
 	if (!entity->stats)
 		return -ENOMEM;
 
@@ -357,10 +356,6 @@ void drm_sched_entity_fini(struct drm_sched_entity *entity)
 		entity->dependency = NULL;
 	}
 
-	spin_lock(&entity->stats->lock);
-	entity->stats->entity = NULL;
-	spin_unlock(&entity->stats->lock);
-
 	drm_sched_stats_put(entity->stats);
 	entity->stats = NULL;
 
@@ -412,21 +407,16 @@ void drm_sched_entity_set_priority(struct drm_sched_entity *entity,
 	spin_lock(&entity->lock);
 	entity->priority = priority;
 
+	struct drm_sched_entity_stats *stats = entity->stats;
+	spin_lock(&stats->lock);
+
 	if (entity->priority >= DRM_SCHED_PRIORITY_COUNT)
 		entity->stats->slice = DRM_SCHED_DEFAULT_SLICE;
 	else
 		entity->stats->slice =
 			drm_sched_priority_slice[entity->priority];
 
-	struct drm_sched_rq *rq = entity->rq;
-
-	if (rq && drm_sched_policy == DRM_SCHED_POLICY_EEVDF) {
-		spin_lock(&rq->lock);
-		drm_sched_rq_update_eevdf_locked(entity, rq, ktime_set(0, 0));
-		spin_unlock(&rq->lock);
-	}
-
-	spin_unlock(&entity->lock);
+	spin_unlock(&stats->lock);
 }
 EXPORT_SYMBOL(drm_sched_entity_set_priority);
 
@@ -549,6 +539,13 @@ struct drm_sched_job *drm_sched_entity_pop_job(struct drm_sched_entity *entity)
 			spin_unlock(&rq->lock);
 			spin_unlock(&entity->lock);
 		}
+	} else if (drm_sched_policy == DRM_SCHED_POLICY_EEVDF) {
+		spin_lock(&entity->lock);
+		struct drm_sched_rq *rq = entity->rq;
+		spin_lock(&rq->lock);
+		drm_sched_rq_update_eevdf_locked(entity, rq);
+		spin_unlock(&rq->lock);
+		spin_unlock(&entity->lock);
 	}
 
 	/* Jobs and entities might have different lifecycles. Since we're
@@ -641,7 +638,6 @@ void drm_sched_entity_push_job(struct drm_sched_job *sched_job)
 	if (first) {
 		struct drm_gpu_scheduler *sched;
 		struct drm_sched_rq *rq;
-
 		/* Add the entity to the run queue */
 		spin_lock(&entity->lock);
 		if (entity->stopped) {
@@ -660,8 +656,7 @@ void drm_sched_entity_push_job(struct drm_sched_job *sched_job)
 		if (drm_sched_policy == DRM_SCHED_POLICY_FIFO)
 			drm_sched_rq_update_fifo_locked(entity, rq, submit_ts);
 		else if (drm_sched_policy == DRM_SCHED_POLICY_EEVDF)
-			drm_sched_rq_update_eevdf_locked(entity, rq,
-							 ktime_set(0, 0));
+			drm_sched_rq_update_eevdf_locked(entity, rq);
 
 		spin_unlock(&rq->lock);
 		spin_unlock(&entity->lock);

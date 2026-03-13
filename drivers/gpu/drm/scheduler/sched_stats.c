@@ -6,19 +6,14 @@
 
 #include "sched_internal.h"
 
-struct drm_sched_entity_stats *
-alloc_entity_stats(struct drm_sched_entity *entity)
+struct drm_sched_entity_stats *alloc_entity_stats(void)
 {
-	struct drm_sched_entity_stats *stats;
-
-	stats = kzalloc_obj(*stats);
+	struct drm_sched_entity_stats *stats = kzalloc_obj(*stats);
 	if (!stats)
 		return NULL;
 
 	kref_init(&stats->kref);
 	spin_lock_init(&stats->lock);
-
-	stats->entity = entity;
 
 	return stats;
 }
@@ -41,15 +36,22 @@ inline void drm_sched_stats_put(struct drm_sched_entity_stats *stats)
 	kref_put(&stats->kref, drm_sched_stats_release);
 }
 
-void drm_sched_stats_update_deadline(struct drm_sched_entity_stats *stats,
-				     ktime_t delta)
+void drm_sched_stats_update_runtime(struct drm_sched_entity_stats *stats,
+				    ktime_t delta)
 {
-	unsigned long flags;
-	spin_lock_irqsave(&stats->lock, flags);
+	spin_lock(&stats->lock);
 
 	stats->runtime += delta;
 	stats->v_runtime += ktime_to_ns(delta);
+
+	spin_unlock(&stats->lock);
+}
+
+void drm_sched_stats_update_deadline(struct drm_sched_entity_stats *stats)
+{
+	spin_lock(&stats->lock);
+
 	stats->deadline = stats->v_runtime + stats->slice;
 
-	spin_unlock_irqrestore(&stats->lock, flags);
+	spin_unlock(&stats->lock);
 }

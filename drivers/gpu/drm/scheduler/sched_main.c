@@ -66,6 +66,7 @@
  * This implies waiting for previously executed jobs.
  */
 
+#include "linux/spinlock.h"
 #include <linux/export.h>
 #include <linux/wait.h>
 #include <linux/sched.h>
@@ -189,7 +190,7 @@ void drm_sched_rq_update_fifo_locked(struct drm_sched_entity *entity,
 }
 
 void drm_sched_rq_update_eevdf_locked(struct drm_sched_entity *entity,
-				      struct drm_sched_rq *rq, ktime_t delta)
+				      struct drm_sched_rq *rq)
 {
 	/*
 	 * Both locks need to be grabbed, one to protect from entity->rq change
@@ -201,7 +202,7 @@ void drm_sched_rq_update_eevdf_locked(struct drm_sched_entity *entity,
 
 	drm_sched_rq_remove_fifo_locked(entity, rq);
 
-	drm_sched_stats_update_deadline(entity->stats, delta);
+	drm_sched_stats_update_deadline(entity->stats);
 
 	rb_add_cached(&entity->rb_tree_node, &rq->rb_tree_root,
 		      drm_sched_entity_compare_before_eevdf);
@@ -409,19 +410,13 @@ static void drm_sched_job_done(struct drm_sched_job *s_job, int result)
 	atomic_sub(s_job->credits, &sched->credit_count);
 	atomic_dec(sched->score);
 
-	ktime_t delta = ktime_set(0, 0);
-	if (s_job->start_ts != 0)
-		delta = ktime_sub(ktime_get(), s_job->start_ts);
+	if (drm_sched_policy == DRM_SCHED_POLICY_EEVDF) {
+		ktime_t delta = 0;
+		ktime_t now = ktime_get();
+		if (ktime_after(now, s_job->start_ts))
+			delta = ktime_sub(now, s_job->start_ts);
 
-	struct drm_sched_entity *entity = s_job->stats->entity;
-	if (entity && entity->rq) {
-		spin_lock(&entity->lock);
-		spin_lock(&entity->rq->lock);
-
-		drm_sched_rq_update_eevdf_locked(entity, entity->rq, delta);
-
-		spin_unlock(&entity->rq->lock);
-		spin_unlock(&entity->lock);
+		drm_sched_stats_update_runtime(s_job->stats, delta);
 	}
 
 	trace_drm_sched_job_done(s_fence);
