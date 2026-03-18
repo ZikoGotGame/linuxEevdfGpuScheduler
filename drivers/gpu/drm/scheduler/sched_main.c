@@ -157,7 +157,9 @@ drm_sched_entity_compare_before_eevdf(struct rb_node *a,
 		rb_entry((a), struct drm_sched_entity, rb_tree_node);
 	struct drm_sched_entity *ent_b =
 		rb_entry((b), struct drm_sched_entity, rb_tree_node);
-
+	trace_printk(
+		"EEVDF: Comparing entities A with deadline %llu and B with deadline %llu",
+		ent_a->stats->deadline, ent_b->stats->deadline);
 	return ent_a->stats->deadline < ent_b->stats->deadline;
 }
 
@@ -192,6 +194,9 @@ void drm_sched_rq_update_fifo_locked(struct drm_sched_entity *entity,
 void drm_sched_rq_update_eevdf_locked(struct drm_sched_entity *entity,
 				      struct drm_sched_rq *rq)
 {
+	trace_printk(
+		"EEVDF: Updating entity with deadline %llu and vRuntime %llu",
+		entity->stats->deadline, entity->stats->v_runtime);
 	/*
 	 * Both locks need to be grabbed, one to protect from entity->rq change
 	 * for entity from within concurrent drm_sched_entity_select_rq and the
@@ -351,6 +356,7 @@ static struct drm_sched_entity *
 drm_sched_rq_select_entity_fifo(struct drm_gpu_scheduler *sched,
 				struct drm_sched_rq *rq)
 {
+	trace_printk("EEVDF: picking an entity from the RB tree.");
 	struct rb_node *rb;
 
 	spin_lock(&rq->lock);
@@ -409,15 +415,6 @@ static void drm_sched_job_done(struct drm_sched_job *s_job, int result)
 
 	atomic_sub(s_job->credits, &sched->credit_count);
 	atomic_dec(sched->score);
-
-	if (drm_sched_policy == DRM_SCHED_POLICY_EEVDF) {
-		ktime_t delta = 0;
-		ktime_t now = ktime_get();
-		if (ktime_after(now, s_job->start_ts))
-			delta = ktime_sub(now, s_job->start_ts);
-
-		drm_sched_stats_update_runtime(s_job->stats, delta);
-	}
 
 	trace_drm_sched_job_done(s_fence);
 
@@ -877,8 +874,6 @@ int drm_sched_job_init(struct drm_sched_job *job,
 	memset(job, 0, sizeof(*job));
 
 	job->entity = entity;
-	job->stats = entity->stats;
-	drm_sched_stats_get(job->stats);
 	job->credits = credits;
 	job->s_fence = drm_sched_fence_alloc(entity, owner, drm_client_id);
 	if (!job->s_fence)
@@ -920,6 +915,7 @@ void drm_sched_job_arm(struct drm_sched_job *job)
 
 	job->sched = sched;
 	job->s_priority = entity->priority;
+	job->stats = drm_sched_stats_get(entity->stats);
 
 	drm_sched_fence_init(job->s_fence, job->entity);
 }
@@ -1269,6 +1265,15 @@ static void drm_sched_free_job_work(struct work_struct *w)
 
 	job = drm_sched_get_finished_job(sched, &have_more);
 	if (job) {
+		if (drm_sched_policy == DRM_SCHED_POLICY_EEVDF) {
+			trace_printk("EEVDF: Updating a job from callback.");
+			ktime_t delta = 0;
+			ktime_t now = ktime_get();
+			if (ktime_after(now, job->start_ts))
+				delta = ktime_sub(now, job->start_ts);
+
+			drm_sched_stats_update_runtime(job->stats, delta);
+		}
 		sched->ops->free_job(job);
 		if (have_more)
 			drm_sched_run_free_queue(sched);

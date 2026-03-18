@@ -18,9 +18,12 @@ struct drm_sched_entity_stats *alloc_entity_stats(void)
 	return stats;
 }
 
-inline void drm_sched_stats_get(struct drm_sched_entity_stats *stats)
+inline struct drm_sched_entity_stats *
+drm_sched_stats_get(struct drm_sched_entity_stats *stats)
 {
 	kref_get(&stats->kref);
+
+	return stats;
 }
 
 static void drm_sched_stats_release(struct kref *kref)

@@ -21,6 +21,9 @@ make -C "$VMLINUX_SRC" O="$BUILD_DIR" olddefconfig
 
 "$VMLINUX_SRC/scripts/config" --file .config \
   --set-str LOCALVERSION "$LOCALVERSION" \
+  --enable FTRACE \
+  --enable FUNCTION_TRACER \
+  --enable PRINTK \
   --enable DRM \
   --enable DRM_SCHED \
   --enable DRM_DEBUG 

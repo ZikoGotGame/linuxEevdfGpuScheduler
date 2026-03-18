@@ -21,6 +21,7 @@
  *
  */
 
+#include "linux/ktime.h"
 #include "linux/spinlock.h"
 #include <linux/export.h>
 #include <linux/slab.h>
@@ -115,6 +116,21 @@ int drm_sched_entity_init(struct drm_sched_entity *entity,
 				      (s32)DRM_SCHED_PRIORITY_KERNEL);
 		}
 		entity->rq = sched_list[0]->sched_rq[0];
+
+		struct drm_sched_rq *rq = entity->rq;
+		spin_lock(&rq->lock);
+		ktime_t min_runtime =
+			rb_first_cached(&rq->rb_tree_root) ?
+				rb_entry(rb_first_cached(&rq->rb_tree_root),
+					 struct drm_sched_entity, rb_tree_node)
+					->stats->runtime :
+				0;
+		spin_unlock(&rq->lock);
+
+		entity->stats->runtime = min_runtime;
+		entity->stats->v_runtime = ktime_to_ns(min_runtime);
+		entity->stats->deadline =
+			entity->stats->v_runtime + entity->stats->slice;
 	}
 
 	init_completion(&entity->entity_idle);
@@ -404,6 +420,7 @@ static void drm_sched_entity_wakeup(struct dma_fence *f,
 void drm_sched_entity_set_priority(struct drm_sched_entity *entity,
 				   enum drm_sched_priority priority)
 {
+	trace_printk("EEVDF: updating entity priority,");
 	spin_lock(&entity->lock);
 	entity->priority = priority;
 
@@ -540,6 +557,7 @@ struct drm_sched_job *drm_sched_entity_pop_job(struct drm_sched_entity *entity)
 			spin_unlock(&entity->lock);
 		}
 	} else if (drm_sched_policy == DRM_SCHED_POLICY_EEVDF) {
+		trace_printk("EEVDF: updating entity position after job pop.");
 		spin_lock(&entity->lock);
 		struct drm_sched_rq *rq = entity->rq;
 		spin_lock(&rq->lock);
@@ -591,6 +609,25 @@ void drm_sched_entity_select_rq(struct drm_sched_entity *entity)
 	if (rq != entity->rq) {
 		drm_sched_rq_remove_entity(entity->rq, entity);
 		entity->rq = rq;
+	}
+
+	if (rq != NULL) {
+		spin_lock(&rq->lock);
+		ktime_t min_runtime =
+			rb_first_cached(&rq->rb_tree_root) ?
+				rb_entry(rb_first_cached(&rq->rb_tree_root),
+					 struct drm_sched_entity, rb_tree_node)
+					->stats->runtime :
+				0;
+		spin_unlock(&rq->lock);
+
+		struct drm_sched_entity_stats *stats = entity->stats;
+
+		spin_lock(&stats->lock);
+		stats->runtime = min_runtime;
+		stats->v_runtime = ktime_to_ns(min_runtime);
+		stats->deadline = stats->v_runtime + stats->slice;
+		spin_unlock(&stats->lock);
 	}
 
 	if (entity->num_sched_list == 1)
@@ -652,7 +689,7 @@ void drm_sched_entity_push_job(struct drm_sched_job *sched_job)
 
 		spin_lock(&rq->lock);
 		drm_sched_rq_add_entity(rq, entity);
-
+		trace_printk("EEVDF: first push for entity.");
 		if (drm_sched_policy == DRM_SCHED_POLICY_FIFO)
 			drm_sched_rq_update_fifo_locked(entity, rq, submit_ts);
 		else if (drm_sched_policy == DRM_SCHED_POLICY_EEVDF)

@@ -65,7 +65,8 @@ void drm_sched_fence_scheduled(struct drm_sched_fence *fence,
 			       struct dma_fence *parent);
 void drm_sched_fence_finished(struct drm_sched_fence *fence, int result);
 
-inline void drm_sched_stats_get(struct drm_sched_entity_stats *stats);
+inline struct drm_sched_entity_stats *
+drm_sched_stats_get(struct drm_sched_entity_stats *stats);
 
 inline void drm_sched_stats_put(struct drm_sched_entity_stats *stats);
 
