@@ -220,6 +220,8 @@ struct drm_sched_entity {
 	 */
 	bool stopped;
 
+	bool first;
+
 	/**
 	 * @entity_idle:
 	 *
@@ -264,6 +266,8 @@ struct drm_sched_rq {
 	struct drm_sched_entity *current_entity;
 	struct list_head entities;
 	struct rb_root_cached rb_tree_root;
+	u64 vruntime_sum;
+	u64 num_entites;
 };
 
 /**

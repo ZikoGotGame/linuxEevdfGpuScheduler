@@ -66,6 +66,10 @@
  * This implies waiting for previously executed jobs.
  */
 
+#include "linux/ktime.h"
+#include "linux/lockdep.h"
+#include "linux/rbtree.h"
+#include "linux/rbtree_types.h"
 #include "linux/spinlock.h"
 #include <linux/export.h>
 #include <linux/wait.h>
@@ -206,7 +210,6 @@ void drm_sched_rq_update_eevdf_locked(struct drm_sched_entity *entity,
 	lockdep_assert_held(&rq->lock);
 
 	drm_sched_rq_remove_fifo_locked(entity, rq);
-
 	drm_sched_stats_update_deadline(entity->stats);
 
 	rb_add_cached(&entity->rb_tree_node, &rq->rb_tree_root,
@@ -229,6 +232,8 @@ static void drm_sched_rq_init(struct drm_gpu_scheduler *sched,
 	rq->rb_tree_root = RB_ROOT_CACHED;
 	rq->current_entity = NULL;
 	rq->sched = sched;
+	rq->vruntime_sum = 0;
+	rq->num_entites = 0;
 }
 
 /**
@@ -248,8 +253,18 @@ void drm_sched_rq_add_entity(struct drm_sched_rq *rq,
 	if (!list_empty(&entity->list))
 		return;
 
+	struct drm_sched_entity_stats *stats = entity->stats;
+	rq->vruntime_sum += stats->v_runtime;
+	++rq->num_entites;
+
 	atomic_inc(rq->sched->score);
 	list_add_tail(&entity->list, &rq->entities);
+}
+
+inline u64 drm_sched_rq_calculate_avg_vruntime(struct drm_sched_rq *rq)
+{
+	lockdep_assert_held(&rq->lock);
+	return rq->num_entites ? rq->vruntime_sum / rq->num_entites : 0;
 }
 
 /**
@@ -279,6 +294,17 @@ void drm_sched_rq_remove_entity(struct drm_sched_rq *rq,
 	if (drm_sched_policy == DRM_SCHED_POLICY_FIFO ||
 	    drm_sched_policy == DRM_SCHED_POLICY_EEVDF)
 		drm_sched_rq_remove_fifo_locked(entity, rq);
+	u64 vruntime = READ_ONCE(entity->stats->v_runtime);
+
+	if (rq->vruntime_sum >= vruntime)
+		rq->vruntime_sum -= vruntime;
+	else
+		rq->vruntime_sum = 0;
+
+	if (rq->num_entites)
+		--rq->num_entites;
+	else
+		rq->num_entites = 0;
 
 	spin_unlock(&rq->lock);
 }
@@ -358,8 +384,11 @@ drm_sched_rq_select_entity_fifo(struct drm_gpu_scheduler *sched,
 {
 	trace_printk("EEVDF: picking an entity from the RB tree.");
 	struct rb_node *rb;
+	struct rb_node *first = NULL;
+	struct drm_sched_entity *best = NULL;
 
 	spin_lock(&rq->lock);
+	u64 avg_vruntime = drm_sched_rq_calculate_avg_vruntime(rq);
 	for (rb = rb_first_cached(&rq->rb_tree_root); rb; rb = rb_next(rb)) {
 		struct drm_sched_entity *entity;
 
@@ -373,13 +402,29 @@ drm_sched_rq_select_entity_fifo(struct drm_gpu_scheduler *sched,
 				return ERR_PTR(-ENOSPC);
 			}
 
+			if (!first)
+				first = rb;
+
+			if (entity->first) {
+				entity->first = false;
+				continue;
+			}
+
+			if (avg_vruntime < READ_ONCE(entity->stats->v_runtime))
+				continue;
+			best = entity;
 			reinit_completion(&entity->entity_idle);
 			break;
 		}
 	}
+
+	if (!best && first) {
+		best = rb_entry(first, struct drm_sched_entity, rb_tree_node);
+		reinit_completion(&best->entity_idle);
+	}
 	spin_unlock(&rq->lock);
 
-	return rb ? rb_entry(rb, struct drm_sched_entity, rb_tree_node) : NULL;
+	return best;
 }
 
 /**
@@ -1271,8 +1316,29 @@ static void drm_sched_free_job_work(struct work_struct *w)
 			ktime_t now = ktime_get();
 			if (ktime_after(now, job->start_ts))
 				delta = ktime_sub(now, job->start_ts);
+			spin_lock(&job->stats->lock);
+			struct drm_sched_entity *entity = job->stats->entity;
+			u64 weight = job->stats->weight;
+			spin_unlock(&job->stats->lock);
 
-			drm_sched_stats_update_runtime(job->stats, delta);
+			if (entity) {
+				spin_lock(&entity->lock);
+				struct drm_sched_rq *rq = entity->rq;
+
+				if (rq) {
+					spin_lock(&rq->lock);
+					spin_lock(&job->stats->lock);
+					drm_sched_stats_update_vruntime(
+						job->stats, delta);
+					drm_sched_rq_update_eevdf_locked(entity,
+									 rq);
+					spin_unlock(&job->stats->lock);
+					rq->vruntime_sum +=
+						ktime_to_ns(delta) / weight;
+					spin_unlock(&rq->lock);
+				}
+				spin_unlock(&entity->lock);
+			}
 		}
 		sched->ops->free_job(job);
 		if (have_more)

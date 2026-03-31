@@ -39,22 +39,17 @@ inline void drm_sched_stats_put(struct drm_sched_entity_stats *stats)
 	kref_put(&stats->kref, drm_sched_stats_release);
 }
 
-void drm_sched_stats_update_runtime(struct drm_sched_entity_stats *stats,
-				    ktime_t delta)
+void drm_sched_stats_update_vruntime(struct drm_sched_entity_stats *stats,
+				     ktime_t delta)
 {
-	spin_lock(&stats->lock);
+	lockdep_assert_held(&stats->lock);
 
-	stats->runtime += delta;
-	stats->v_runtime += ktime_to_ns(delta);
-
-	spin_unlock(&stats->lock);
+	stats->v_runtime += ktime_to_ns(delta) / stats->weight;
 }
 
 void drm_sched_stats_update_deadline(struct drm_sched_entity_stats *stats)
 {
-	spin_lock(&stats->lock);
+	lockdep_assert_held(&stats->lock);
 
 	stats->deadline = stats->v_runtime + stats->slice;
-
-	spin_unlock(&stats->lock);
 }

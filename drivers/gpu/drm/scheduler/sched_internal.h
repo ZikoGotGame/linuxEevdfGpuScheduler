@@ -33,9 +33,10 @@ extern int drm_sched_policy;
 struct drm_sched_entity_stats {
 	struct kref kref;
 	spinlock_t lock;
-	ktime_t runtime;
+	struct drm_sched_entity *entity;
 	u64 v_runtime;
 	u64 deadline;
+	u64 weight;
 	u64 slice;
 };
 
@@ -51,6 +52,8 @@ void drm_sched_rq_update_fifo_locked(struct drm_sched_entity *entity,
 
 void drm_sched_rq_update_eevdf_locked(struct drm_sched_entity *entity,
 				      struct drm_sched_rq *rq);
+
+inline u64 drm_sched_rq_calculate_avg_vruntime(struct drm_sched_rq *rq);
 
 void drm_sched_entity_select_rq(struct drm_sched_entity *entity);
 struct drm_sched_job *drm_sched_entity_pop_job(struct drm_sched_entity *entity);
@@ -72,8 +75,8 @@ inline void drm_sched_stats_put(struct drm_sched_entity_stats *stats);
 
 struct drm_sched_entity_stats *alloc_entity_stats(void);
 
-void drm_sched_stats_update_runtime(struct drm_sched_entity_stats *stats,
-				    ktime_t delta);
+void drm_sched_stats_update_vruntime(struct drm_sched_entity_stats *stats,
+				     ktime_t delta);
 
 void drm_sched_stats_update_deadline(struct drm_sched_entity_stats *stats);
 
