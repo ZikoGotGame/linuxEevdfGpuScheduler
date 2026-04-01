@@ -3,6 +3,7 @@
 #ifndef _DRM_GPU_SCHEDULER_INTERNAL_H_
 #define _DRM_GPU_SCHEDULER_INTERNAL_H_
 
+#include "drm/gpu_scheduler.h"
 #include <linux/ktime.h>
 #include <linux/kref.h>
 #include <linux/spinlock.h>
@@ -16,6 +17,7 @@ extern int drm_sched_policy;
 
 /* 1 ms virtual */
 #define DRM_SCHED_DEFAULT_SLICE 1000000ULL
+#define SHIFT 3
 
 /**
  * struct drm_sched_entity_stats - execution stats for an entity.
@@ -38,6 +40,7 @@ struct drm_sched_entity_stats {
 	u64 deadline;
 	u64 weight;
 	u64 slice;
+	enum drm_sched_priority priority;
 };
 
 void drm_sched_wakeup(struct drm_gpu_scheduler *sched);
@@ -53,7 +56,8 @@ void drm_sched_rq_update_fifo_locked(struct drm_sched_entity *entity,
 void drm_sched_rq_update_eevdf_locked(struct drm_sched_entity *entity,
 				      struct drm_sched_rq *rq);
 
-inline u64 drm_sched_rq_calculate_avg_vruntime(struct drm_sched_rq *rq);
+inline u64 drm_sched_rq_calculate_avg_vruntime(struct drm_sched_rq *rq,
+					       enum drm_sched_priority prio);
 
 void drm_sched_entity_select_rq(struct drm_sched_entity *entity);
 struct drm_sched_job *drm_sched_entity_pop_job(struct drm_sched_entity *entity);

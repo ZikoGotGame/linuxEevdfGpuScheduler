@@ -43,8 +43,10 @@ void drm_sched_stats_update_vruntime(struct drm_sched_entity_stats *stats,
 				     ktime_t delta)
 {
 	lockdep_assert_held(&stats->lock);
-
-	stats->v_runtime += ktime_to_ns(delta) / stats->weight;
+	u64 runtime = ktime_to_ns(delta);
+	stats->slice =
+		stats->slice - (stats->slice >> SHIFT) + (runtime >> SHIFT);
+	stats->v_runtime += runtime << stats->weight;
 }
 
 void drm_sched_stats_update_deadline(struct drm_sched_entity_stats *stats)

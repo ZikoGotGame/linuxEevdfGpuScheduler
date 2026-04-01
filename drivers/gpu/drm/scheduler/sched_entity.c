@@ -39,9 +39,7 @@ static const u64 drm_sched_priority_slice[DRM_SCHED_PRIORITY_COUNT] = {
 	DRM_SCHED_DEFAULT_SLICE / 4, DRM_SCHED_DEFAULT_SLICE
 };
 
-static const u64 drm_sched_weights[DRM_SCHED_PRIORITY_COUNT] = { 16, 8, 4, 1 };
-
-static const u64 DRM_SCHED_DEFAULT_WEIGHT = drm_sched_weights[3];
+static const u64 drm_sched_weights[DRM_SCHED_PRIORITY_COUNT] = { 1, 2, 4, 7 };
 
 /**
  * drm_sched_entity_init - Init a context entity used by scheduler when
@@ -79,22 +77,18 @@ int drm_sched_entity_init(struct drm_sched_entity *entity,
 	entity->rq = NULL;
 	entity->guilty = guilty;
 	entity->num_sched_list = num_sched_list;
-	entity->priority = priority;
-	entity->first = true;
+	entity->priority = priority >= DRM_SCHED_PRIORITY_COUNT ?
+				   DRM_SCHED_PRIORITY_NORMAL :
+				   priority;
 	entity->last_user = current->group_leader;
 	entity->stats = alloc_entity_stats();
 	entity->stats->entity = entity;
 	if (!entity->stats)
 		return -ENOMEM;
 
-	if (entity->priority >= DRM_SCHED_PRIORITY_COUNT) {
-		entity->stats->slice = DRM_SCHED_DEFAULT_SLICE;
-		entity->stats->weight = DRM_SCHED_DEFAULT_WEIGHT;
-	} else {
-		entity->stats->slice =
-			drm_sched_priority_slice[entity->priority];
-		entity->stats->weight = drm_sched_weights[entity->priority];
-	}
+	entity->stats->slice = drm_sched_priority_slice[entity->priority];
+	entity->stats->weight = drm_sched_weights[entity->priority];
+
 	/*
 	 * It's perfectly valid to initialize an entity without having a valid
 	 * scheduler attached. It's just not valid to use the scheduler before it
@@ -127,7 +121,8 @@ int drm_sched_entity_init(struct drm_sched_entity *entity,
 
 		struct drm_sched_rq *rq = entity->rq;
 		spin_lock(&rq->lock);
-		entity->stats->v_runtime = ktime_get();
+		entity->stats->v_runtime = drm_sched_rq_calculate_avg_vruntime(
+			rq, entity->priority);
 		spin_unlock(&rq->lock);
 		entity->stats->deadline =
 			entity->stats->v_runtime + entity->stats->slice;
@@ -430,15 +425,12 @@ void drm_sched_entity_set_priority(struct drm_sched_entity *entity,
 
 	struct drm_sched_entity_stats *stats = entity->stats;
 	spin_lock(&stats->lock);
+	entity->priority = priority >= DRM_SCHED_PRIORITY_COUNT ?
+				   DRM_SCHED_PRIORITY_NORMAL :
+				   priority;
+	entity->stats->slice = drm_sched_priority_slice[entity->priority];
+	entity->stats->weight = drm_sched_weights[entity->priority];
 
-	if (entity->priority >= DRM_SCHED_PRIORITY_COUNT) {
-		entity->stats->slice = DRM_SCHED_DEFAULT_SLICE;
-		entity->stats->weight = DRM_SCHED_DEFAULT_WEIGHT;
-	} else {
-		entity->stats->slice =
-			drm_sched_priority_slice[entity->priority];
-		entity->stats->weight = drm_sched_weights[entity->priority];
-	}
 	spin_unlock(&stats->lock);
 }
 EXPORT_SYMBOL(drm_sched_entity_set_priority);
@@ -620,7 +612,8 @@ void drm_sched_entity_select_rq(struct drm_sched_entity *entity)
 
 	if (rq != NULL) {
 		spin_lock(&rq->lock);
-		u64 avg_vruntime = drm_sched_rq_calculate_avg_vruntime(rq);
+		u64 avg_vruntime = drm_sched_rq_calculate_avg_vruntime(
+			rq, entity->priority);
 		spin_unlock(&rq->lock);
 
 		struct drm_sched_entity_stats *stats = entity->stats;

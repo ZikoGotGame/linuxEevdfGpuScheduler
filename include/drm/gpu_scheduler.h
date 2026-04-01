@@ -220,8 +220,6 @@ struct drm_sched_entity {
 	 */
 	bool stopped;
 
-	bool first;
-
 	/**
 	 * @entity_idle:
 	 *
@@ -245,6 +243,11 @@ struct drm_sched_entity {
 	struct rb_node rb_tree_node;
 };
 
+struct avg_vruntime {
+	u64 vruntime_sum;
+	u64 num_entities;
+};
+
 /**
  * struct drm_sched_rq - queue of entities to be scheduled.
  *
@@ -266,8 +269,7 @@ struct drm_sched_rq {
 	struct drm_sched_entity *current_entity;
 	struct list_head entities;
 	struct rb_root_cached rb_tree_root;
-	u64 vruntime_sum;
-	u64 num_entites;
+	struct avg_vruntime avg_times[DRM_SCHED_PRIORITY_COUNT];
 };
 
 /**
