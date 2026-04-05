@@ -168,12 +168,47 @@ drm_sched_entity_compare_before_eevdf(struct rb_node *a,
 	return ent_a->stats->deadline < ent_b->stats->deadline;
 }
 
+static void drm_sched_rq_update_prio(struct drm_sched_rq *rq)
+{
+	enum drm_sched_priority prio = -1;
+	struct rb_node *rb;
+
+	lockdep_assert_held(&rq->lock);
+
+	rb = rb_first_cached(&rq->rb_tree_root);
+	if (rb) {
+		struct drm_sched_entity *entity =
+			rb_entry(rb, typeof(*entity), rb_tree_node);
+
+		prio = entity->priority; /* Unlocked read */
+	}
+
+	rq->head_prio = prio;
+}
+
+u64 drm_sched_rq_get_head_vruntime(struct drm_sched_rq *rq)
+{
+	struct drm_sched_entity *entity;
+	struct rb_node *rb;
+
+	lockdep_assert_held(&rq->lock);
+
+	for (rb = rb_first_cached(&rq->rb_tree_root); rb; rb = rb_next(rb)) {
+		entity = rb_entry(rb, typeof(*entity), rb_tree_node);
+
+		return entity->stats->v_runtime; /* Unlocked read */
+	}
+
+	return 0;
+}
+
 static void drm_sched_rq_remove_fifo_locked(struct drm_sched_entity *entity,
 					    struct drm_sched_rq *rq)
 {
 	if (!RB_EMPTY_NODE(&entity->rb_tree_node)) {
 		rb_erase_cached(&entity->rb_tree_node, &rq->rb_tree_root);
 		RB_CLEAR_NODE(&entity->rb_tree_node);
+		drm_sched_rq_update_prio(rq);
 	}
 }
 
@@ -215,6 +250,7 @@ void drm_sched_rq_update_eevdf_locked(struct drm_sched_entity *entity,
 
 	rb_add_cached(&entity->rb_tree_node, &rq->rb_tree_root,
 		      drm_sched_entity_compare_before_eevdf);
+	drm_sched_rq_update_prio(rq);
 }
 
 /**
@@ -234,9 +270,10 @@ static void drm_sched_rq_init(struct drm_gpu_scheduler *sched,
 	rq->current_entity = NULL;
 	rq->sched = sched;
 	for (u8 i = 0; i < DRM_SCHED_PRIORITY_COUNT; ++i) {
-		rq->avg_times->vruntime_sum = 0;
-		rq->avg_times->num_entities = 0;
+		rq->vruntime_list[i].vruntime_sum = 0;
+		rq->vruntime_list[i].num_entities = 0;
 	}
+	rq->head_prio = -1;
 }
 
 /**
@@ -257,35 +294,29 @@ void drm_sched_rq_add_entity(struct drm_sched_rq *rq,
 		return;
 
 	struct drm_sched_entity_stats *stats = entity->stats;
-	enum drm_sched_priority prio = entity->priority;
-	rq->avg_times[prio].vruntime_sum += stats->v_runtime;
-	++rq->avg_times[prio].num_entities;
+	rq->vruntime_list[entity->priority].vruntime_sum += stats->v_runtime;
+	++rq->vruntime_list[entity->priority].num_entities;
 
 	atomic_inc(rq->sched->score);
 	list_add_tail(&entity->list, &rq->entities);
 }
 
-inline u64 drm_sched_rq_calculate_global_avg_vruntime(struct drm_sched_rq *rq)
+static u64 drm_sched_rq_calculate_avg_vruntime(struct drm_sched_rq *rq,
+					       struct drm_sched_entity *entity)
 {
-	lockdep_assert_held(&rq->lock);
-	u64 sum_vruntime = 0, num_entities = 0;
-	for (u8 i = 0; i < DRM_SCHED_PRIORITY_COUNT; ++i) {
-		sum_vruntime += rq->avg_times[i].vruntime_sum;
-		num_entities += rq->avg_times[i].num_entities;
+	struct avg_vruntime *vruntime_struct =
+		&rq->vruntime_list[entity->priority];
+	if (vruntime_struct->num_entities) {
+		return (vruntime_struct->vruntime_sum +
+			vruntime_struct->num_entities - 1) /
+		       vruntime_struct->num_entities;
 	}
-	return num_entities ? (sum_vruntime + num_entities - 1) / num_entities :
-			      0;
-}
-
-inline u64 drm_sched_rq_calculate_avg_vruntime(struct drm_sched_rq *rq,
-					       enum drm_sched_priority prio)
-{
-	lockdep_assert_held(&rq->lock);
-	return rq->avg_times[prio].num_entities ?
-		       (rq->avg_times[prio].vruntime_sum +
-			rq->avg_times[prio].num_entities - 1) /
-			       rq->avg_times[prio].num_entities :
-		       drm_sched_rq_calculate_global_avg_vruntime(rq);
+	u64 vruntime_sum = 0, num_entities = 0;
+	for (u8 i = 0; i < DRM_SCHED_PRIORITY_COUNT; ++i) {
+		vruntime_sum += rq->vruntime_list[i].vruntime_sum;
+		num_entities += rq->vruntime_list[i].num_entities;
+	}
+	return (vruntime_sum + num_entities - 1) / num_entities;
 }
 
 /**
@@ -315,16 +346,16 @@ void drm_sched_rq_remove_entity(struct drm_sched_rq *rq,
 	if (drm_sched_policy == DRM_SCHED_POLICY_FIFO ||
 	    drm_sched_policy == DRM_SCHED_POLICY_EEVDF)
 		drm_sched_rq_remove_fifo_locked(entity, rq);
-	u64 vruntime = READ_ONCE(entity->stats->v_runtime);
-
-	struct avg_vruntime *avg_runtime = &rq->avg_times[entity->priority];
-	if (avg_runtime->vruntime_sum >= vruntime)
-		avg_runtime->vruntime_sum -= vruntime;
+	u64 vruntime = entity->stats->v_runtime;
+	struct avg_vruntime *vruntime_struct =
+		&rq->vruntime_list[entity->priority];
+	if (vruntime_struct->vruntime_sum >= vruntime)
+		vruntime_struct->vruntime_sum -= vruntime;
 	else
-		avg_runtime->vruntime_sum = 0;
+		vruntime_struct->vruntime_sum = 0;
 
-	if (avg_runtime->num_entities)
-		--avg_runtime->num_entities;
+	if (vruntime_struct->num_entities)
+		--vruntime_struct->num_entities;
 
 	spin_unlock(&rq->lock);
 }
@@ -408,7 +439,6 @@ drm_sched_rq_select_entity_fifo(struct drm_gpu_scheduler *sched,
 	struct drm_sched_entity *best = NULL;
 
 	spin_lock(&rq->lock);
-	u64 avg_runtime = drm_sched_rq_calculate_global_avg_vruntime(rq);
 	for (rb = rb_first_cached(&rq->rb_tree_root); rb; rb = rb_next(rb)) {
 		struct drm_sched_entity *entity;
 
@@ -425,8 +455,9 @@ drm_sched_rq_select_entity_fifo(struct drm_gpu_scheduler *sched,
 			if (!first)
 				first = rb;
 
-			if (avg_runtime < READ_ONCE(entity->stats->v_runtime))
-				continue;
+			// if (drm_sched_rq_calculate_avg_vruntime(rq, entity) <
+			//     READ_ONCE(entity->stats->v_runtime))
+			// 	continue;
 
 			best = entity;
 			reinit_completion(&entity->entity_idle);
@@ -1350,7 +1381,7 @@ static void drm_sched_free_job_work(struct work_struct *w)
 									 rq);
 					spin_unlock(&job->stats->lock);
 
-					rq->avg_times[entity->priority]
+					rq->vruntime_list[entity->priority]
 						.vruntime_sum +=
 						ktime_to_ns(delta) / weight;
 					spin_unlock(&rq->lock);

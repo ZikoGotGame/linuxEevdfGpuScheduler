@@ -269,7 +269,8 @@ struct drm_sched_rq {
 	struct drm_sched_entity *current_entity;
 	struct list_head entities;
 	struct rb_root_cached rb_tree_root;
-	struct avg_vruntime avg_times[DRM_SCHED_PRIORITY_COUNT];
+	struct avg_vruntime vruntime_list[DRM_SCHED_PRIORITY_COUNT];
+	enum drm_sched_priority head_prio;
 };
 
 /**

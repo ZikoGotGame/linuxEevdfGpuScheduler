@@ -39,7 +39,9 @@ static const u64 drm_sched_priority_slice[DRM_SCHED_PRIORITY_COUNT] = {
 	DRM_SCHED_DEFAULT_SLICE / 4, DRM_SCHED_DEFAULT_SLICE
 };
 
-static const u64 drm_sched_weights[DRM_SCHED_PRIORITY_COUNT] = { 1, 2, 4, 7 };
+static const unsigned int drm_sched_weights[DRM_SCHED_PRIORITY_COUNT] = { 1, 2,
+									  4,
+									  7 };
 
 /**
  * drm_sched_entity_init - Init a context entity used by scheduler when
@@ -118,14 +120,6 @@ int drm_sched_entity_init(struct drm_sched_entity *entity,
 				      (s32)DRM_SCHED_PRIORITY_KERNEL);
 		}
 		entity->rq = sched_list[0]->sched_rq[0];
-
-		struct drm_sched_rq *rq = entity->rq;
-		spin_lock(&rq->lock);
-		entity->stats->v_runtime = drm_sched_rq_calculate_avg_vruntime(
-			rq, entity->priority);
-		spin_unlock(&rq->lock);
-		entity->stats->deadline =
-			entity->stats->v_runtime + entity->stats->slice;
 	}
 
 	init_completion(&entity->entity_idle);
@@ -610,25 +604,52 @@ void drm_sched_entity_select_rq(struct drm_sched_entity *entity)
 		entity->rq = rq;
 	}
 
-	if (rq != NULL) {
-		spin_lock(&rq->lock);
-		u64 avg_vruntime = drm_sched_rq_calculate_avg_vruntime(
-			rq, entity->priority);
-		spin_unlock(&rq->lock);
-
-		struct drm_sched_entity_stats *stats = entity->stats;
-
-		spin_lock(&stats->lock);
-		stats->v_runtime =
-			MAX(stats->v_runtime, avg_vruntime + stats->slice);
-		stats->deadline = stats->v_runtime + stats->slice;
-		spin_unlock(&stats->lock);
-	}
+	// if (rq != NULL) {
+	// 	spin_lock(&rq->lock);
+	// 	u64 avg_vruntime = drm_sched_rq_calculate_avg_vruntime(
+	// 		rq, entity->priority);
+	// 	spin_unlock(&rq->lock);
+	//
+	// 	struct drm_sched_entity_stats *stats = entity->stats;
+	//
+	// 	spin_lock(&stats->lock);
+	// 	stats->v_runtime =
+	// 		MAX(stats->v_runtime, avg_vruntime + stats->slice);
+	// 	stats->deadline = stats->v_runtime + stats->slice;
+	// 	spin_unlock(&stats->lock);
+	// }
 
 	if (entity->num_sched_list == 1)
 		entity->sched_list = NULL;
 
 	spin_unlock(&entity->lock);
+}
+
+static void drm_sched_entity_init_vruntime(struct drm_sched_entity *entity,
+					   u64 head_vruntime,
+					   enum drm_sched_priority head_prio)
+{
+	if (head_prio == -1)
+		return;
+
+	enum drm_sched_priority prio = entity->priority;
+	s64 offset;
+
+	if (prio == head_prio) {
+		static bool r;
+		offset = r ? 1 : -1;
+		r ^= 1;
+	} else {
+		s64 a = 1ULL << drm_sched_weights[prio];
+		s64 b = 1ULL << drm_sched_weights[head_prio];
+		offset = a - b;
+	}
+
+	if (offset > 0)
+		entity->stats->v_runtime = head_vruntime + offset;
+	else
+		entity->stats->v_runtime =
+			head_vruntime >= -offset ? head_vruntime + offset : 0;
 }
 
 /**
@@ -683,14 +704,15 @@ void drm_sched_entity_push_job(struct drm_sched_job *sched_job)
 		sched = rq->sched;
 
 		spin_lock(&rq->lock);
+		drm_sched_entity_init_vruntime(
+			entity, drm_sched_rq_get_head_vruntime(rq),
+			rq->head_prio);
 		drm_sched_rq_add_entity(rq, entity);
 		trace_printk("EEVDF: first push for entity.");
 		if (drm_sched_policy == DRM_SCHED_POLICY_FIFO)
 			drm_sched_rq_update_fifo_locked(entity, rq, submit_ts);
 		else if (drm_sched_policy == DRM_SCHED_POLICY_EEVDF) {
-			spin_lock(&entity->stats->lock);
 			drm_sched_rq_update_eevdf_locked(entity, rq);
-			spin_unlock(&entity->stats->lock);
 		}
 
 		spin_unlock(&rq->lock);
