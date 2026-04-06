@@ -294,7 +294,9 @@ void drm_sched_rq_add_entity(struct drm_sched_rq *rq,
 		return;
 
 	struct drm_sched_entity_stats *stats = entity->stats;
+	spin_lock(&stats->lock);
 	rq->vruntime_list[entity->priority].vruntime_sum += stats->v_runtime;
+	spin_unlock(&stats->lock);
 	++rq->vruntime_list[entity->priority].num_entities;
 
 	atomic_inc(rq->sched->score);
@@ -455,9 +457,9 @@ drm_sched_rq_select_entity_fifo(struct drm_gpu_scheduler *sched,
 			if (!first)
 				first = rb;
 
-			// if (drm_sched_rq_calculate_avg_vruntime(rq, entity) <
-			//     READ_ONCE(entity->stats->v_runtime))
-			// 	continue;
+			if (drm_sched_rq_calculate_avg_vruntime(rq, entity) <
+			    READ_ONCE(entity->stats->v_runtime))
+				continue;
 
 			best = entity;
 			reinit_completion(&entity->entity_idle);
@@ -1383,7 +1385,7 @@ static void drm_sched_free_job_work(struct work_struct *w)
 
 					rq->vruntime_list[entity->priority]
 						.vruntime_sum +=
-						ktime_to_ns(delta) / weight;
+						ktime_to_ns(delta) << weight;
 					spin_unlock(&rq->lock);
 				}
 				spin_unlock(&entity->lock);

@@ -498,6 +498,22 @@ drm_sched_job_dependency(struct drm_sched_job *job,
 	return NULL;
 }
 
+static void drm_sched_entity_save_vruntime(struct drm_sched_entity *entity,
+					   u64 head_vruntime)
+{
+	struct drm_sched_entity_stats *stats = entity->stats;
+	u64 vruntime;
+
+	spin_lock(&stats->lock);
+	vruntime = stats->v_runtime;
+	if (head_vruntime && vruntime > head_vruntime)
+		vruntime = vruntime - head_vruntime;
+	else
+		vruntime = 0;
+	stats->v_runtime = vruntime;
+	spin_unlock(&stats->lock);
+}
+
 struct drm_sched_job *drm_sched_entity_pop_job(struct drm_sched_entity *entity)
 {
 	struct drm_sched_job *sched_job;
@@ -548,16 +564,17 @@ struct drm_sched_job *drm_sched_entity_pop_job(struct drm_sched_entity *entity)
 			spin_unlock(&rq->lock);
 			spin_unlock(&entity->lock);
 		}
+	} else if (drm_sched_policy == DRM_SCHED_POLICY_EEVDF) {
+		spin_lock(&entity->lock);
+		if (!drm_sched_entity_queue_peek(entity)) {
+			struct drm_sched_rq *rq = entity->rq;
+			spin_lock(&rq->lock);
+			drm_sched_entity_save_vruntime(
+				entity, drm_sched_rq_get_head_vruntime(rq));
+			spin_unlock(&rq->lock);
+		}
+		spin_unlock(&entity->lock);
 	}
-	// else if (drm_sched_policy == DRM_SCHED_POLICY_EEVDF) {
-	// 	trace_printk("EEVDF: updating entity position after job pop.");
-	// 	spin_lock(&entity->lock);
-	// 	struct drm_sched_rq *rq = entity->rq;
-	// 	spin_lock(&rq->lock);
-	// 	drm_sched_rq_update_eevdf_locked(entity, rq);
-	// 	spin_unlock(&rq->lock);
-	// 	spin_unlock(&entity->lock);
-	// }
 
 	/* Jobs and entities might have different lifecycles. Since we're
 	 * removing the job from the entities queue, set the jobs entity pointer
@@ -629,27 +646,23 @@ static void drm_sched_entity_init_vruntime(struct drm_sched_entity *entity,
 					   u64 head_vruntime,
 					   enum drm_sched_priority head_prio)
 {
-	if (head_prio == -1)
-		return;
-
 	enum drm_sched_priority prio = entity->priority;
-	s64 offset;
+	spin_lock(&entity->stats->lock);
+	s64 vruntime = entity->stats->v_runtime;
 
-	if (prio == head_prio) {
-		static bool r;
-		offset = r ? 1 : -1;
-		r ^= 1;
-	} else {
-		s64 a = 1ULL << drm_sched_weights[prio];
-		s64 b = 1ULL << drm_sched_weights[head_prio];
-		offset = a - b;
+	if (!vruntime && head_vruntime) {
+		if (prio == head_prio) {
+			static bool r;
+			vruntime = r ? 1 : -1;
+			r ^= 1;
+		} else {
+			u64 a = 1ULL << drm_sched_weights[prio];
+			u64 b = 1ULL << drm_sched_weights[head_prio];
+			vruntime = a - b;
+		}
 	}
-
-	if (offset > 0)
-		entity->stats->v_runtime = head_vruntime + offset;
-	else
-		entity->stats->v_runtime =
-			head_vruntime >= -offset ? head_vruntime + offset : 0;
+	entity->stats->v_runtime = head_vruntime + vruntime;
+	spin_unlock(&entity->stats->lock);
 }
 
 /**

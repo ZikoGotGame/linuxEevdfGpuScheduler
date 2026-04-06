@@ -17,7 +17,7 @@ extern int drm_sched_policy;
 
 /* 1 ms virtual */
 #define DRM_SCHED_DEFAULT_SLICE 1000000ULL
-#define SHIFT 2
+#define SHIFT 3
 
 /**
  * struct drm_sched_entity_stats - execution stats for an entity.
