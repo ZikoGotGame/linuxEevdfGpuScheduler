@@ -66,6 +66,7 @@
  * This implies waiting for previously executed jobs.
  */
 
+#include "linux/dma-fence.h"
 #include "linux/ktime.h"
 #include "linux/lockdep.h"
 #include "linux/rbtree.h"
@@ -165,7 +166,7 @@ drm_sched_entity_compare_before_eevdf(struct rb_node *a,
 	trace_printk(
 		"EEVDF: Comparing entities A with deadline %llu and B with deadline %llu",
 		ent_a->stats->deadline, ent_b->stats->deadline);
-	return ent_a->stats->deadline < ent_b->stats->deadline;
+	return ent_a->stats->v_runtime < ent_b->stats->v_runtime;
 }
 
 static void drm_sched_rq_update_prio(struct drm_sched_rq *rq)
@@ -457,9 +458,9 @@ drm_sched_rq_select_entity_fifo(struct drm_gpu_scheduler *sched,
 			if (!first)
 				first = rb;
 
-			if (drm_sched_rq_calculate_avg_vruntime(rq, entity) <
-			    READ_ONCE(entity->stats->v_runtime))
-				continue;
+			// if (drm_sched_rq_calculate_avg_vruntime(rq, entity) <
+			//     READ_ONCE(entity->stats->v_runtime))
+			// 	continue;
 
 			best = entity;
 			reinit_completion(&entity->entity_idle);
@@ -1361,10 +1362,11 @@ static void drm_sched_free_job_work(struct work_struct *w)
 	if (job) {
 		if (drm_sched_policy == DRM_SCHED_POLICY_EEVDF) {
 			trace_printk("EEVDF: Updating a job from callback.");
-			ktime_t delta = 0;
-			ktime_t now = ktime_get();
-			if (ktime_after(now, job->start_ts))
-				delta = ktime_sub(now, job->start_ts);
+			ktime_t start =
+				dma_fence_timestamp(&job->s_fence->scheduled);
+			ktime_t end =
+				dma_fence_timestamp(&job->s_fence->finished);
+			ktime_t delta = ktime_sub(end, start);
 			spin_lock(&job->stats->lock);
 			struct drm_sched_entity *entity = job->stats->entity;
 			u64 weight = job->stats->weight;
@@ -1437,7 +1439,6 @@ static void drm_sched_run_job_work(struct work_struct *w)
 	drm_sched_job_begin(sched_job);
 
 	trace_drm_sched_job_run(sched_job, entity);
-	sched_job->start_ts = ktime_get();
 	/*
 	 * The run_job() callback must by definition return a fence whose
 	 * refcount has been incremented for the scheduler already.

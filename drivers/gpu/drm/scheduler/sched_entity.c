@@ -648,19 +648,11 @@ static void drm_sched_entity_init_vruntime(struct drm_sched_entity *entity,
 {
 	enum drm_sched_priority prio = entity->priority;
 	spin_lock(&entity->stats->lock);
-	s64 vruntime = entity->stats->v_runtime;
+	u64 vruntime = entity->stats->v_runtime;
 
-	if (!vruntime && head_vruntime) {
-		if (prio == head_prio) {
-			static bool r;
-			vruntime = r ? 1 : -1;
-			r ^= 1;
-		} else {
-			u64 a = 1ULL << drm_sched_weights[prio];
-			u64 b = 1ULL << drm_sched_weights[head_prio];
-			vruntime = a - b;
-		}
-	}
+	if (!vruntime && head_vruntime)
+		vruntime = prio + 1;
+
 	entity->stats->v_runtime = head_vruntime + vruntime;
 	spin_unlock(&entity->stats->lock);
 }

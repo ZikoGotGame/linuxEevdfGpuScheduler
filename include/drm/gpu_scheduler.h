@@ -361,13 +361,6 @@ struct drm_sched_job {
 	 */
 	ktime_t submit_ts;
 
-	/**
-	 * @start_ts:
-	 *
-	 * When the job starts running on the GPU.
-	 */
-	ktime_t start_ts;
-
 	/*
 	 * @stats:
 	 *
