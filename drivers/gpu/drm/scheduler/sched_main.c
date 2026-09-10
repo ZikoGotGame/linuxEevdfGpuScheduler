@@ -84,7 +84,7 @@
 #define CREATE_TRACE_POINTS
 #include "gpu_scheduler_trace.h"
 
-int drm_sched_policy = DRM_SCHED_POLICY_FAIR;
+int drm_sched_policy = DRM_SCHED_POLICY_EEVDF;
 
 /**
  * DOC: sched_policy (int)

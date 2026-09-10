@@ -116,8 +116,7 @@ ktime_t drm_sched_entity_stats_job_add_gpu_time(struct drm_sched_job *job)
 int drm_sched_entity_init(struct drm_sched_entity *entity,
 			  enum drm_sched_priority priority,
 			  struct drm_gpu_scheduler **sched_list,
-			  unsigned int num_sched_list,
-			  atomic_t *guilty)
+			  unsigned int num_sched_list, atomic_t *guilty)
 {
 	if (!entity || !sched_list || !num_sched_list || !sched_list[0])
 		return -EINVAL;
@@ -133,7 +132,8 @@ int drm_sched_entity_init(struct drm_sched_entity *entity,
 	entity->priority = priority;
 	entity->last_user = current->group_leader;
 	entity->rq_priority = drm_sched_policy == DRM_SCHED_POLICY_FAIR ?
-			      DRM_SCHED_PRIORITY_KERNEL : priority;
+				      DRM_SCHED_PRIORITY_KERNEL :
+				      priority;
 	entity->num_sched_list = num_sched_list;
 	entity->sched_list = num_sched_list > 1 ? sched_list : NULL;
 	RCU_INIT_POINTER(entity->last_scheduled, NULL);
@@ -155,10 +155,10 @@ int drm_sched_entity_init(struct drm_sched_entity *entity,
 		 * available.
 		 */
 		if (p >= sched_list[0]->num_user_rqs) {
-			dev_err(sched_list[0]->dev, "entity with out-of-bounds priority:%u num_user_rqs:%u\n",
+			dev_err(sched_list[0]->dev,
+				"entity with out-of-bounds priority:%u num_user_rqs:%u\n",
 				p, sched_list[0]->num_user_rqs);
-			p = max_t(s32,
-				  (s32)sched_list[0]->num_user_rqs - 1,
+			p = max_t(s32, (s32)sched_list[0]->num_user_rqs - 1,
 				  (s32)DRM_SCHED_PRIORITY_KERNEL);
 			entity->priority = p;
 		}
@@ -193,8 +193,8 @@ EXPORT_SYMBOL(drm_sched_entity_init);
  * can be pushed to @entity.
  */
 void drm_sched_entity_modify_sched(struct drm_sched_entity *entity,
-				    struct drm_gpu_scheduler **sched_list,
-				    unsigned int num_sched_list)
+				   struct drm_gpu_scheduler **sched_list,
+				   unsigned int num_sched_list)
 {
 	WARN_ON(!num_sched_list || !sched_list);
 
@@ -210,8 +210,7 @@ static bool drm_sched_entity_is_idle(struct drm_sched_entity *entity)
 	rmb(); /* for list_empty to work without lock */
 
 	if (list_empty(&entity->list) ||
-	    spsc_queue_count(&entity->job_queue) == 0 ||
-	    entity->stopped)
+	    spsc_queue_count(&entity->job_queue) == 0 || entity->stopped)
 		return true;
 
 	return false;
@@ -284,8 +283,8 @@ static void drm_sched_entity_kill_jobs_work(struct work_struct *wrk)
 static void drm_sched_entity_kill_jobs_cb(struct dma_fence *f,
 					  struct dma_fence_cb *cb)
 {
-	struct drm_sched_job *job = container_of(cb, struct drm_sched_job,
-						 finish_cb);
+	struct drm_sched_job *job =
+		container_of(cb, struct drm_sched_job, finish_cb);
 
 	dma_fence_put(f);
 
@@ -365,9 +364,8 @@ long drm_sched_entity_flush(struct drm_sched_entity *entity, long timeout)
 	if (current->flags & PF_EXITING) {
 		if (timeout)
 			ret = wait_event_timeout(
-					sched->job_scheduled,
-					drm_sched_entity_is_idle(entity),
-					timeout);
+				sched->job_scheduled,
+				drm_sched_entity_is_idle(entity), timeout);
 	} else {
 		wait_event_killable(sched->job_scheduled,
 				    drm_sched_entity_is_idle(entity));
@@ -456,7 +454,46 @@ void drm_sched_entity_set_priority(struct drm_sched_entity *entity,
 				   enum drm_sched_priority priority)
 {
 	spin_lock(&entity->lock);
-	entity->priority = priority;
+	/* MODIFIED: added by Zac Tawfick (updating the avg vrutnime for the run queue) */
+	if (drm_sched_policy != DRM_SCHED_POLICY_EEVDF) {
+		entity->priority = priority;
+		spin_unlock(&entity->lock);
+		return;
+	}
+
+	struct drm_sched_rq *rq = entity->rq;
+
+	s64 w_old = drm_sched_prio_weight[entity->priority];
+	s64 w_new = drm_sched_prio_weight[priority];
+
+	if (!rq || RB_EMPTY_NODE(&entity->rb_tree_node)) {
+		entity->lag = clamp_t(s64, entity->lag, -DRM_SCHED_LAG_MAX_NS,
+				      DRM_SCHED_LAG_MAX_NS);
+		entity->lag = div64_s64(entity->lag * w_old, w_new);
+		entity->priority = priority;
+	} else {
+		spin_lock(&rq->lock);
+		ktime_t avg = drm_sched_rq_avg_vruntime(rq);
+		s64 lag;
+
+		drm_sched_rq_remove_fifo_locked(entity, rq);
+
+		spin_lock(&entity->stats->lock);
+		lag = ktime_to_ns(ktime_sub(avg, entity->stats->vruntime));
+		lag = clamp_t(s64, lag, -DRM_SCHED_LAG_MAX_NS,
+			      DRM_SCHED_LAG_MAX_NS);
+		entity->stats->vruntime = ktime_sub(
+			avg, ns_to_ktime(div64_s64(lag * w_old, w_new)));
+		entity->vruntime = entity->stats->vruntime;
+		spin_unlock(&entity->stats->lock);
+
+		entity->priority = priority;
+
+		drm_sched_rq_update_fifo_locked(
+			entity, rq, drm_sched_entity_calc_vdeadline(entity));
+		spin_unlock(&rq->lock);
+	}
+
 	spin_unlock(&entity->lock);
 }
 EXPORT_SYMBOL(drm_sched_entity_set_priority);
@@ -486,7 +523,6 @@ static bool drm_sched_entity_add_dependency_cb(struct drm_sched_entity *entity,
 	s_fence = to_drm_sched_fence(fence);
 	if (!fence->error && s_fence && s_fence->sched == sched &&
 	    !test_bit(DRM_SCHED_FENCE_DONT_PIPELINE, &fence->flags)) {
-
 		/*
 		 * Fence is from the same scheduler, only need to wait for
 		 * it to be scheduled
@@ -498,7 +534,8 @@ static bool drm_sched_entity_add_dependency_cb(struct drm_sched_entity *entity,
 
 	if (trace_drm_sched_job_unschedulable_enabled() &&
 	    !test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &entity->dependency->flags))
-		trace_drm_sched_job_unschedulable(sched_job, entity->dependency);
+		trace_drm_sched_job_unschedulable(sched_job,
+						  entity->dependency);
 
 	if (!dma_fence_add_callback(entity->dependency, &entity->cb,
 				    drm_sched_entity_wakeup))

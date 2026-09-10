@@ -6,6 +6,7 @@
 #include <linux/ktime.h>
 #include <linux/kref.h>
 #include <linux/spinlock.h>
+#include <drm/gpu_scheduler.h>
 
 /**
  * struct drm_sched_entity_stats - execution stats for an entity.
@@ -22,21 +23,36 @@
  * reference counted by both entities and jobs.
  */
 struct drm_sched_entity_stats {
-	struct kref	kref;
-	spinlock_t	lock; /* Protects the below fields. */
-	ktime_t		runtime;
-	ktime_t		prev_runtime;
-	ktime_t		vruntime;
+	struct kref kref;
+	spinlock_t lock; /* Protects the below fields. */
+	ktime_t runtime;
+	ktime_t prev_runtime;
+	ktime_t vruntime;
 
-	struct ewma_drm_sched_avgtime   avg_job_us;
+	struct ewma_drm_sched_avgtime avg_job_us;
 };
 
+/*
+* MODIFIED: added by Zac Tawfick
+*
+* An array for accessing the weights assigned to each priority. The weights
+* correspond to the same ratios as the shift array above. These will be used
+* in virtual deadline calculations.
+*/
+
+extern const s64 drm_sched_prio_weight[];
 /* Used to choose between FIFO and RR job-scheduling */
 extern int drm_sched_policy;
 
-#define DRM_SCHED_POLICY_RR    0
-#define DRM_SCHED_POLICY_FIFO  1
-#define DRM_SCHED_POLICY_FAIR  2
+#define DRM_SCHED_POLICY_RR 0
+#define DRM_SCHED_POLICY_FIFO 1
+#define DRM_SCHED_POLICY_FAIR 2
+/* MODIFIED: Added by Zac Tawfick */
+#define DRM_SCHED_POLICY_EEVDF 3
+#define DRM_SCHED_SLICE_DEFAULT_US 1000
+#define DRM_SCHED_SLICE_MIN_US 50
+#define DRM_SCHED_SLICE_MAX_US 100000
+#define DRM_SCHED_LAG_MAX_NS (2LL * DRM_SCHED_SLICE_MAX_US * NSEC_PER_USEC)
 
 bool drm_sched_can_queue(struct drm_gpu_scheduler *sched,
 			 struct drm_sched_entity *entity);
@@ -45,6 +61,17 @@ void drm_sched_wakeup(struct drm_gpu_scheduler *sched);
 void drm_sched_rq_init(struct drm_gpu_scheduler *sched,
 		       struct drm_sched_rq *rq);
 
+/* MODIFIED: avg_add and avg_sub added by Zac Tawfick */
+void drm_sched_rq_avg_add(struct drm_sched_rq *rq,
+			  struct drm_sched_entity *entity);
+void drm_sched_rq_avg_sub(struct drm_sched_rq *rq,
+			  struct drm_sched_entity *entity);
+ktime_t drm_sched_rq_avg_vruntime(struct drm_sched_rq *rq);
+void drm_sched_rq_remove_fifo_locked(struct drm_sched_entity *entity,
+				     struct drm_sched_rq *rq);
+void drm_sched_rq_update_fifo_locked(struct drm_sched_entity *entity,
+				     struct drm_sched_rq *rq, ktime_t ts);
+ktime_t drm_sched_entity_calc_vdeadline(struct drm_sched_entity *entity);
 struct drm_gpu_scheduler *
 drm_sched_rq_add_entity(struct drm_sched_entity *entity, ktime_t ts);
 void drm_sched_rq_remove_entity(struct drm_sched_rq *rq,
@@ -111,8 +138,7 @@ drm_sched_entity_queue_peek(struct drm_sched_entity *entity)
 }
 
 /* Return true if entity could provide a job. */
-static inline bool
-drm_sched_entity_is_ready(struct drm_sched_entity *entity)
+static inline bool drm_sched_entity_is_ready(struct drm_sched_entity *entity)
 {
 	if (!spsc_queue_count(&entity->job_queue))
 		return false;
