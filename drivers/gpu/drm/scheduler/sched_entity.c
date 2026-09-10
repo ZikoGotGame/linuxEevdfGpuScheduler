@@ -131,7 +131,10 @@ int drm_sched_entity_init(struct drm_sched_entity *entity,
 	entity->guilty = guilty;
 	entity->priority = priority;
 	entity->last_user = current->group_leader;
-	entity->rq_priority = drm_sched_policy == DRM_SCHED_POLICY_FAIR ?
+	/* MODIFIED: added by Zac Tawfick: use 1 queue when EEVDF is the policy. */
+	entity->rq_priority = drm_sched_policy == DRM_SCHED_POLICY_FAIR ||
+					      drm_sched_policy ==
+						      DRM_SCHED_POLICY_EEVDF ?
 				      DRM_SCHED_PRIORITY_KERNEL :
 				      priority;
 	entity->num_sched_list = num_sched_list;
