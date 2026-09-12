@@ -1150,7 +1150,8 @@ int drm_sched_init(struct drm_gpu_scheduler *sched,
 	}
 
 	sched->num_user_rqs = args->num_rqs;
-	sched->num_rqs = drm_sched_policy != DRM_SCHED_POLICY_FAIR ||
+	/* MODIFIED: added EEVDF case by Zac Tawfick */
+	sched->num_rqs = drm_sched_policy != DRM_SCHED_POLICY_FAIR &&
 					 drm_sched_policy !=
 						 DRM_SCHED_POLICY_EEVDF ?
 				 args->num_rqs :
