@@ -294,7 +294,7 @@ struct drm_sched_rq {
 	spinlock_t lock;
 	/* Following members are protected by the @lock: */
 	ktime_t rr_ts;
-	/* MODIFIED: vruntime_sum & weight_sum were added members by Zac Tawfick */
+	/* MODIFIED: vruntime_sum, weight_sum & last_vruntime were added members by Zac Tawfick */
 	s64 vruntime_sum;
 	s64 weight_sum;
 	ktime_t last_vruntime;
