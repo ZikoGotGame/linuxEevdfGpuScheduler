@@ -1150,8 +1150,11 @@ int drm_sched_init(struct drm_gpu_scheduler *sched,
 	}
 
 	sched->num_user_rqs = args->num_rqs;
-	sched->num_rqs =
-		drm_sched_policy != DRM_SCHED_POLICY_FAIR ? args->num_rqs : 1;
+	sched->num_rqs = drm_sched_policy != DRM_SCHED_POLICY_FAIR ||
+					 drm_sched_policy !=
+						 DRM_SCHED_POLICY_EEVDF ?
+				 args->num_rqs :
+				 1;
 	sched->sched_rq = kzalloc_objs(*sched->sched_rq, args->num_rqs);
 	if (!sched->sched_rq)
 		goto Out_check_own;

@@ -468,16 +468,16 @@ void drm_sched_entity_set_priority(struct drm_sched_entity *entity,
 
 	s64 w_old = drm_sched_prio_weight[entity->priority];
 	s64 w_new = drm_sched_prio_weight[priority];
+	s64 lag;
 
 	if (!rq || RB_EMPTY_NODE(&entity->rb_tree_node)) {
-		entity->lag = clamp_t(s64, entity->lag, -DRM_SCHED_LAG_MAX_NS,
+		lag = div64_s64(entity->lag * w_old, w_new);
+		entity->lag = clamp_t(s64, lag, -DRM_SCHED_LAG_MAX_NS,
 				      DRM_SCHED_LAG_MAX_NS);
-		entity->lag = div64_s64(entity->lag * w_old, w_new);
 		entity->priority = priority;
 	} else {
 		spin_lock(&rq->lock);
 		ktime_t avg = drm_sched_rq_avg_vruntime(rq);
-		s64 lag;
 
 		drm_sched_rq_remove_fifo_locked(entity, rq);
 

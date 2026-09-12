@@ -39,9 +39,9 @@ struct drm_sched_entity_stats {
 * correspond to the same ratios as the shift array above. These will be used
 * in virtual deadline calculations.
 */
-
 extern const s64 drm_sched_prio_weight[];
-/* Used to choose between FIFO and RR job-scheduling */
+
+/* Used to choose between FIFO, RR, FAIR & EEVDF job-scheduling */
 extern int drm_sched_policy;
 
 #define DRM_SCHED_POLICY_RR 0

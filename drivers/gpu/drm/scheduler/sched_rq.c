@@ -25,7 +25,7 @@ drm_sched_entity_compare_before(struct rb_node *a, const struct rb_node *b)
 	return ktime_before(ea->oldest_job_waiting, eb->oldest_job_waiting);
 }
 
-/* MODIFIED: added by Zac */
+/* MODIFIED: added by Zac Tawfick */
 const s64 drm_sched_prio_weight[] = {
 	[DRM_SCHED_PRIORITY_KERNEL] = 64,
 	[DRM_SCHED_PRIORITY_HIGH] = 32,
@@ -394,8 +394,9 @@ ktime_t drm_sched_entity_calc_vdeadline(struct drm_sched_entity *entity)
 	runtime = stats->runtime;
 	stats->prev_runtime = runtime;
 	stats->vruntime = ktime_add_ns(
-		stats->vruntime, ktime_to_ns(ktime_sub(runtime, prev)) *
-					 div64_s64(weight_ref, entity_weight));
+		stats->vruntime,
+		div64_s64(ktime_to_ns(ktime_sub(runtime, prev)) * weight_ref,
+			  entity_weight));
 	vruntime = stats->vruntime;
 	spin_unlock(&stats->lock);
 
@@ -407,7 +408,7 @@ ktime_t drm_sched_entity_calc_vdeadline(struct drm_sched_entity *entity)
 	slice = clamp_t(s64, slice, DRM_SCHED_SLICE_MIN_US,
 			DRM_SCHED_SLICE_MAX_US);
 
-	vslice = slice * NSEC_PER_USEC * div64_s64(weight_ref, entity_weight);
+	vslice = div64_s64(slice * NSEC_PER_USEC * weight_ref, entity_weight);
 	entity->vruntime = vruntime;
 
 	if (counted)
