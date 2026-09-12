@@ -194,6 +194,3 @@ sphinx_*/
 
 # bc language scripts (not LLVM bitcode)
 !kernel/time/timeconst.bc
-
-# MODIFIED
-*plan.md
