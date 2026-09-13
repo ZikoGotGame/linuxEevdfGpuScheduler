@@ -86,11 +86,9 @@ ktime_t drm_sched_rq_avg_vruntime(struct drm_sched_rq *rq)
 {
 	lockdep_assert_held(&rq->lock);
 
-	if (rq->weight_sum)
-		rq->last_vruntime = ns_to_ktime(
-			div64_s64(rq->vruntime_sum, rq->weight_sum));
-
-	return rq->last_vruntime;
+	return rq->weight_sum ? ns_to_ktime(div64_s64(rq->vruntime_sum,
+						      rq->weight_sum)) :
+				0;
 }
 
 static void drm_sched_rq_update_prio(struct drm_sched_rq *rq)
@@ -173,9 +171,9 @@ void drm_sched_rq_init(struct drm_gpu_scheduler *sched, struct drm_sched_rq *rq)
 	rq->rb_tree_root = RB_ROOT_CACHED;
 	rq->sched = sched;
 	rq->head_prio = DRM_SCHED_PRIORITY_INVALID;
+	/* MODIFIED: added by Zac Tawfick */
 	rq->vruntime_sum = 0;
 	rq->weight_sum = 0;
-	rq->last_vruntime = 0;
 }
 
 /*
