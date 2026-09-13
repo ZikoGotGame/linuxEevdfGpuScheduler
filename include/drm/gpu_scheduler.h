@@ -279,7 +279,6 @@ struct drm_sched_entity {
  * @rr_ts: monotonically incrementing fake timestamp for RR mode.
  * @vruntime_sum: the sum of vruntimes of entities in this rqu.
  * @weight_sum: the sum of weights of entities in this rq.
- * @last_vruntime: the value of the previous avg vruntime.
  * @entities: list of the entities to be scheduled.
  * @rb_tree_root: root of time based priority queue of entities for FIFO scheduling
  * @head_prio: priority of the top tree element.
@@ -294,10 +293,9 @@ struct drm_sched_rq {
 	spinlock_t lock;
 	/* Following members are protected by the @lock: */
 	ktime_t rr_ts;
-	/* MODIFIED: vruntime_sum, weight_sum & last_vruntime were added members by Zac Tawfick */
+	/* MODIFIED: vruntime_sum & weight_sum were added members by Zac Tawfick */
 	s64 vruntime_sum;
 	s64 weight_sum;
-	ktime_t last_vruntime;
 	struct list_head entities;
 	struct rb_root_cached rb_tree_root;
 	enum drm_sched_priority head_prio;
