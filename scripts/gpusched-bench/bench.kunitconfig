@@ -1,0 +1,19 @@
+# KUnit config for timing the DRM scheduler quality suites under QEMU.
+#
+# Deliberately no PROVE_LOCKING / LOCKDEP / DEBUG_OBJECTS / DEBUG_SPINLOCK /
+# DEBUG_LIST: they add overhead to exactly the code being measured. Use
+# drivers/gpu/drm/scheduler/.kunitconfig (UML, lockdep) for correctness runs.
+#
+# The x86_64 build enables PRINTK_TIME regardless, so every log line starts
+# with "[    1.234567] ". Strip it before line-anchored parsing:
+#   sed -E 's/^\[ *[0-9]+\.[0-9]+\] //' LOG
+CONFIG_KUNIT=y
+CONFIG_DRM=y
+CONFIG_DRM_SCHED=y
+CONFIG_DRM_SCHED_KUNIT_TEST=y
+CONFIG_SMP=y
+CONFIG_NR_CPUS=8
+CONFIG_HZ_1000=y
+CONFIG_HIGH_RES_TIMERS=y
+CONFIG_PREEMPT=y
+CONFIG_LOG_BUF_SHIFT=21
