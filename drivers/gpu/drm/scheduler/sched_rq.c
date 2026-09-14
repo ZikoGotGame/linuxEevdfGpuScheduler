@@ -295,6 +295,38 @@ drm_sched_entity_restore_vruntime(struct drm_sched_entity *entity,
 	return vruntime;
 }
 
+/*
+* MODIFIED: added by Zac Tawfick
+*
+* Charge GPU time accounted since the last update into a queued entity's
+* vruntime.
+*
+* This function is called in select entity to ensure that vrutnimes are accurate.
+*/
+static void drm_sched_entity_charge_pending(struct drm_sched_rq *rq,
+					    struct drm_sched_entity *entity)
+{
+	struct drm_sched_entity_stats *stats = entity->stats;
+	s64 entity_weight = drm_sched_prio_weight[entity->priority];
+	s64 weight_ref = drm_sched_prio_weight[DRM_SCHED_PRIORITY_NORMAL];
+	s64 delta;
+
+	lockdep_assert_held(&rq->lock);
+
+	spin_lock(&stats->lock);
+	delta = ktime_to_ns(ktime_sub(stats->runtime, stats->prev_runtime));
+	if (delta > 0) {
+		drm_sched_rq_avg_sub(rq, entity);
+		stats->prev_runtime = stats->runtime;
+		stats->vruntime = ktime_add_ns(stats->vruntime,
+					       div64_s64(delta * weight_ref,
+							 entity_weight));
+		entity->vruntime = stats->vruntime;
+		drm_sched_rq_avg_add(rq, entity);
+	}
+	spin_unlock(&stats->lock);
+}
+
 /**
 * MODIFIED: added by Zac Tawfick
 *
@@ -592,8 +624,16 @@ drm_sched_rq_select_entity(struct drm_gpu_scheduler *sched,
 
 	spin_lock(&rq->lock);
 
-	if (eevdf)
+	if (eevdf) {
+		/* MODIFIED: added by Zac Tawfick: compare up-to-date vruntimes */
+		for (rb = rb_first_cached(&rq->rb_tree_root); rb;
+		     rb = rb_next(rb))
+			drm_sched_entity_charge_pending(
+				rq, rb_entry(rb, struct drm_sched_entity,
+					     rb_tree_node));
+
 		avg = drm_sched_rq_avg_vruntime(rq);
+	}
 
 	for (rb = rb_first_cached(&rq->rb_tree_root); rb; rb = rb_next(rb)) {
 		struct drm_sched_entity *entity =
